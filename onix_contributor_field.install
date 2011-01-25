@@ -1,0 +1,33 @@
+<?php
+
+/**
+* Implementation of hook_field_schema().
+*/
+function onix_contributor_field_field_schema() {
+  $columns = array();
+
+  $columns['onix_contributor_nid'] = array(
+    'description' => 'A contributor node id.',
+    'type'     => 'int',
+    'unsigned' => TRUE,
+    'not null' => FALSE,
+  );
+  $columns['onix_contributor_type'] = array(
+    'description' => 'A contributor type.',
+    'type' => 'varchar',
+    'length' => 255,
+    'default' => '',
+    'not null' => FALSE,
+  );
+
+  return array(
+    'columns' => $columns,
+    'indexes' => array('onix_contributor_nid' => array('onix_contributor_nid')),
+    'foreign keys' => array(
+      'nid' => array(
+        'table' => 'node',
+        'columns' => array('onix_contributor_nid' => 'nid'),
+      ),
+    ),
+  );
+}

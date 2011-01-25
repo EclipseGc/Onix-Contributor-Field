@@ -1,0 +1,408 @@
+<?php
+
+function onix_contributor_field_menu() {
+  $items = array();
+  $items['onix_contributor/autocomplete/%/%'] = array(
+    'page callback' => 'onix_contributor_autocomplete',
+    'page arguments' => array(2, 3),
+    'access callback' => 'onix_contributor_autocomplete_access',
+    'access arguments' => array(2, 3, 'access content'),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+function onix_contributor_field_autocomplete($entity_type, $field_name, $string = '') {
+  $field = field_info_field($field_name);
+
+  $references = _onix_contributor_field_potential_references($field, $string, 'contains', array(), 10);
+  foreach ($references as $id => $row) {
+    // Add a class wrapper for a few required CSS overrides.
+    $matches[$row['title'] . " [contributor:$id]"] = '<div class="reference-autocomplete">' . $row['rendered'] . '</div>';
+  }
+  drupal_json_output($matches);
+}
+
+function _onix_contributor_field_potential_references($field, $string = '', $match = 'contains', $ids = array(), $limit = NULL) {
+  $results = &drupal_static(__FUNCTION__, array());
+
+  // Create unique id for static cache.
+  $cid = $field['field_name'] . ':' . $match . ':'
+    . ($string !== '' ? $string : implode('-', $ids))
+    . ':' . $limit;
+  if (!isset($results[$cid])) {
+    $references = _onix_contributor_field_potential_references_standard($field, $string, $match, $ids, $limit);
+
+    // Store the results.
+    $results[$cid] = !empty($references) ? $references : array();
+  }
+
+  return $results[$cid];
+}
+
+/**
+ * Helper function for _node_reference_potential_references().
+ *
+ * List of referenceable nodes defined by content types.
+ */
+function _onix_contributor_field_potential_references_standard($field, $string = '', $match = 'contains', $ids = array(), $limit = NULL) {
+  $query = db_select('node', 'n');
+  $node_nid_alias   = $query->addField('n', 'nid');
+  $node_title_alias = $query->addField('n', 'title', 'node_title');
+  $node_type_alias  = $query->addField('n', 'type',  'node_type');
+  $query->addTag('node_access');
+  $query->addMetaData('id', ' _onix_contributor_potential_references_standard');
+  $query->condition('n.type', 'onix_contributor', '=');
+
+  if ($string !== '') {
+    switch ($match) {
+      case 'contains':
+        $query->condition('n.title', '%' . $string . '%', 'LIKE');
+        break;
+
+      case 'starts_with':
+        $query->condition('n.title', $string . '%', 'LIKE');
+        break;
+
+      case 'equals':
+      default: // no match type or incorrect match type: use "="
+        $query->condition('n.title', $string);
+        break;
+    }
+  }
+  elseif ($ids) {
+    $query->condition('n.nid', $ids, 'IN', $ids);
+  }
+
+  $query
+    ->orderBy($node_title_alias);
+
+  if ($limit) {
+    $query->range(0, $limit);
+  }
+
+  $result = $query->execute();
+  $references = array();
+  foreach ($result->fetchAll() as $node) {
+    $references[$node->nid] = array(
+      'title'    => $node->node_title,
+      'rendered' => check_plain($node->node_title),
+    );
+  }
+  return $references;
+}
+
+function onix_contributor_field_autocomplete_access($entity_type, $field_name, $perm) {
+  return user_access($perm) && ($field = field_info_field($field_name)) && field_access('view', $field, $entity_type) && field_access('edit', $field, $entity_type);
+}
+
+function onix_contributor_field_field_info() {
+  $fields = array();
+
+  $fields['onix_contributor'] = array(
+    'label' => t('Contributor'),
+    'description' => t('A field used for storing contributor reference and contributor type information'),
+    'default_widget' => 'onix_contributor_field_standard',
+    'default_formatter' => 'onix_contributor_field_default_formatter',
+  );
+
+  return $fields;
+}
+
+function onix_contributor_field_field_is_empty($item, $field) {
+  return empty($item['onix_contributor_nid']);
+}
+
+function onix_contributor_field_field_widget_info() {
+  $widgets = array();
+
+  $widgets['onix_contributor_field_standard'] = array(
+    'label' => t('Onix Contributor'),
+    'field types' => array('onix_contributor_field'),
+    'settings' => array(
+      'autocomplete_match' => 'contains',
+      'size' => 60,
+      'autocomplete_path' => 'onix_contributor/autocomplete',
+    ),
+  );
+
+  return $widgets;
+}
+
+function onix_contributor_field_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+  $element = array();
+  $settings = $instance['widget']['settings'];
+
+  if ($instance['widget']['type'] == 'onix_contributor_field_standard') {
+    $element['onix_contributor_nid'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Contributor'),
+      '#default_value' => empty($items[$delta]['onix_contributor_nid']) ? NULL : $items[$delta]['onix_contributor_nid'],
+      '#required' => FALSE,
+    );
+    $element['onix_contributor_type'] = array(
+      '#type' => 'select',
+      '#title' => t('Contributor Type'),
+      '#options' => array_unshift(onix_contributor_field_contributor_types(), array('none' => t('None Selected'))),
+      '#default_value' => empty($items[$delta]['onix_contributor_type']) ? 'none' : $items[$delta]['onix_contributor_type'],
+    );
+  }
+  return $element;
+}
+
+function onix_contributor_field_field_validate($entity_type, $entity, $field, $instance, $langcode, $items, &$errors) {
+  if (!empty($entity)) {
+    foreach ($items as $delta => $item) {
+      if (!empty($item['onix_contributor_nid']) && $item['onix_contributor_type'] == 'none') {
+        // set error
+        $errors[$field['field_name']][$langcode][$delta]['onix_contributor_type'] = array(
+          'error' => t('%name: You must provide a contributor type.', array('%name' => t($instance['label']))),
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_field_widget_settings_form().
+ */
+function onix_contributor_field_field_widget_settings_form($field, $instance) {
+  $widget   = $instance['widget'];
+  $defaults = field_info_widget_settings($widget['type']);
+  $settings = array_merge($defaults, $widget['settings']);
+
+  $form = array();
+  if ($widget['type'] == 'onix_contributor_field_autocomplete') {
+    $form['autocomplete_match'] = array(
+      '#type'             => 'select',
+      '#title'            => t('Autocomplete matching'),
+      '#default_value'    => $settings['autocomplete_match'],
+      '#options'          => array(
+        'starts_with'     => t('Starts with'),
+        'contains'        => t('Contains'),
+      ),
+      '#description'      => t('Select the method used to collect autocomplete suggestions. Note that <em>Contains</em> can cause performance issues on sites with thousands of nodes.'),
+    );
+    $form['size'] = array(
+      '#type'             => 'textfield',
+      '#title'            => t('Size of textfield'),
+      '#default_value'    => $settings['size'],
+      '#element_validate' => array('_element_validate_integer_positive'),
+      '#required'         => TRUE,
+    );
+  }
+  return $form;
+}
+
+function onix_contributor_field_field_formatter_info() {
+  return array(
+    'onix_contributor_default_formatter' => array(
+      'label' => t('Default'),
+      'field types' => array('onix_contributor_field'),
+    ),
+  );
+}
+
+/**
+* Implementation of hook_field_formatter_view().
+*/
+function onix_contributor_field_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $element = array();
+
+  if ($display['type'] == 'onix_contributor_field_default_formatter') {
+    foreach ($items as $delta => $item) {
+      $element[$delta] = array(
+        '#theme' => array('onix_contributor_field_default_formatter'),
+        '#identifier' => $item,
+      );
+    }
+  }
+  return $element;
+}
+
+function template_preprocess_onix_contributor_default_formatter(&$variables) {
+  drupal_add_css(drupal_get_path('module', 'onix_contributor_field') . '/theme/onix_contributor_field.css');
+}
+
+/**
+* Implementation of hook_theme().
+*/
+function onix_contributor_field_theme() {
+  $path = drupal_get_path('module', 'onix_contributor_field') . '/theme';
+  $templates = array();
+
+  $templates['onix_contributor_field_default_formatter'] = array(
+    'variables' => array('identifier' => NULL),
+    'template' => 'onix-contributor-field-default-formatter',
+    'path' => $path,
+  );
+
+  return $templates;
+}
+
+/**
+* Creates a required, locked instance of an onix_contributor field on the specified bundle.
+*
+* @param $name
+* The name of the field; if it already exists, a new instance of the existing
+* field will be created.
+* @param $entity_type
+* The type of entity the field instance will be attached to.
+* @param $bundle
+* The bundle name of the entity the field instance will be attached to.
+* @param $label
+* The label of the field instance.
+* @param $weight
+* The default weight of the field instance widget.
+*/
+function onix_contributor_field_create_instance($name, $entity_type, $bundle, $label, $weight = 0) {
+  $field = field_info_field($name);
+  $instance = field_info_instance($entity_type, $name, $bundle);
+
+  if (empty($field)) {
+    $field = array(
+      'field_name' => $name,
+      'type' => 'onix_contributor_field',
+      'cardinality' => FIELD_CARDINALITY_UNLIMITED,
+      'entity_types' => array($entity_type),
+      'translatable' => FALSE,
+      'locked' => TRUE,
+    );
+    $field = field_create_field($field);
+  }
+
+  if (empty($instance)) {
+    $instance = array(
+      'field_name' => $name,
+      'entity_type' => $entity_type,
+      'bundle' => $bundle,
+
+      'label' => $label,
+      'required' => TRUE,
+      'settings' => array(),
+      'widget' => array(
+        'type' => 'onix_contributor_field_standard',
+        'module' => 'onix_contributor',
+        'active' => 0,
+        'settings' => array(
+          'autocomplete_match' => 'contains',
+          'size' => 60,
+          'autocomplete_path' => 'onix_contributor/autocomplete',
+        ),
+      ),
+      'required' => 1,
+      'description' => '',
+      'default_value' => NULL,
+      'display' => array(),
+    );
+
+    $entity_info = entity_get_info($entity_type);
+
+    // Spoof the default view mode so its display type is set.
+    $entity_info['view modes']['default'] = array();
+
+    foreach ($entity_info['view modes'] as $view_mode => $data) {
+      $instance['display'][$view_mode] = array(
+        'label' => 'hidden',
+        'type' => 'onix_contributor_field_default_formatter',
+      );
+    }
+
+    field_create_instance($instance);
+  }
+}
+
+function onix_contributor_field_contributor_types() {
+  return array(
+    'A01' => t('By (author)'),
+    'A02' => t('With'),
+    'A03' => t('Screenplay by'),
+    'A04' => t('Libretto by'),
+    'A05' => t('Lyrics by'),
+    'A06' => t('By (composer)'),
+    'A07' => t('By (artist)'),
+    'A08' => t('By (photographer)'),
+    'A09' => t('Created by'),
+    'A10' => t('From an idea by'),
+    'A11' => t('Designed by'),
+    'A12' => t('Illustrated by'),
+    'A13' => t('Photographs by'),
+    'A14' => t('Text by'),
+    'A15' => t('Preface by'),
+    'A16' => t('Prologue by'),
+    'A17' => t('Summary by'),
+    'A18' => t('Supplement by'),
+    'A19' => t('Afterword by'),
+    'A20' => t('Notes by'),
+    'A21' => t('Commentaries by'),
+    'A22' => t('Epilogue by'),
+    'A23' => t('Foreword by'),
+    'A24' => t('Introduction by'),
+    'A25' => t('Footnotes by'),
+    'A26' => t('Memoir by'),
+    'A27' => t('Experiments by'),
+    'A29' => t('Introduction and notes by'),
+    'A30' => t('Software written by'),
+    'A31' => t('Book and lyrics by'),
+    'A32' => t('Contributions by'),
+    'A33' => t('Appendix by'),
+    'A34' => t('Index by'),
+    'A35' => t('Drawings by'),
+    'A36' => t('Cover design or artwork by'),
+    'A37' => t('Preliminary work by'),
+    'A38' => t('Original author'),
+    'A39' => t('Maps by'),
+    'A40' => t('Inked or colored by'),
+    'A41' => t('Pop-ups by'),
+    'A42' => t('Continued by'),
+    'A43' => t('Interviewer'),
+    'A44' => t('Interviewee'),
+    'A99' => t('Other primary creator'),
+    'B01' => t('Edited by'),
+    'B02' => t('Revised by'),
+    'B03' => t('Retold by'),
+    'B04' => t('Abridged by'),
+    'B05' => t('Adapted by'),
+    'B06' => t('Translated by'),
+    'B07' => t('As told by'),
+    'B08' => t('Translated with commentary by'),
+    'B09' => t('Series edited by'),
+    'B10' => t('Edited and translated by'),
+    'B11' => t('Editor-in-chief'),
+    'B12' => t('Guest editor'),
+    'B13' => t('Volume editor'),
+    'B14' => t('Editorial board member'),
+    'B15' => t('Editorial coordination by'),
+    'B16' => t('Managing editor'),
+    'B17' => t('Founded by'),
+    'B18' => t('Prepared for publication by'),
+    'B19' => t('Associate editor'),
+    'B20' => t('Consultant editor'),
+    'B21' => t('General editor'),
+    'B22' => t('Dramatized by'),
+    'B23' => t('General rapporteur'),
+    'B24' => t('Literary editor'),
+    'B25' => t('Arranged by (music)'),
+    'B99' => t('Other adaptation by'),
+    'C01' => t('Compiled by'),
+    'C02' => t('Selected by'),
+    'C99' => t('Other compilation by'),
+    'D01' => t('Producer'),
+    'D02' => t('Director'),
+    'D03' => t('Conductor'),
+    'D99' => t('Other direction by'),
+    'E01' => t('Actor'),
+    'E02' => t('Dancer'),
+    'E03' => t('Narrator'),
+    'E04' => t('Commentator'),
+    'E05' => t('Vocal soloist'),
+    'E06' => t('Instrumental soloist'),
+    'E07' => t('Read by'),
+    'E08' => t('Performed by'),
+    'E99' => t('Performed by'),
+    'F01' => t('Filmed/photographed by'),
+    'F99' => t('Other recording by'),
+    'Z01' => t('Assisted by'),
+    'Z99' => t('Other'),
+  );
+}

@@ -1,0 +1,7 @@
+;$Id
+name = "Onix Contributor Field"
+description = "A contributor reference field"
+core = "7.x"
+package = "Onix"
+project = "onix_contributor_field"
+version = "7.x-0.1"
